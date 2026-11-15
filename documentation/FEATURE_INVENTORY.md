@@ -1,0 +1,90 @@
+# Feature Inventory
+
+This is the source-based inventory of the legacy application. Both pages include all listed features; `FORCE` determines the initial mode. `index.html` hides the teacher entry button, while `teacher.html` starts at the teacher login screen unless a local teacher-mode flag is present.
+
+## Student entry and navigation
+
+- Join form accepts a display name (2–30 characters after trimming); no account or identity check.
+- On join, the app stores name and progress locally, enters the current session, writes presence, and opens the saved/current stage.
+- Fixed bottom Back/Next navigation switches among five stages. Buttons prevent going outside stages 1–5, although the teacher can also change stage through a banner.
+- If the teacher stage differs, a banner offers “Join” or dismiss; dismissal is only in in-memory `me.skip`.
+- The student may navigate all stages themselves; the teacher stage is a prompt, not a lock.
+
+## Student stages
+
+### 1. Appreciation Wall
+
+- Optional recipient field (30 characters) and message field (240 characters).
+- Checks that the message is nonempty and contains no more than two sentence-like segments using `.`, `!`, and `?` splitting.
+- Writes message with display name, recipient, text, timestamp, and device key. Shows up to 40 wall messages in reverse chronological order.
+- Teacher can close or reopen posting. It is a client-side check; with public database writes, it is bypassable.
+
+### 2. Paraphrasing Studio
+
+- Defines paraphrasing and explains understand → reword → restructure.
+- Shows an original/paraphrased campus-club example and explains synonym and structure changes.
+- Offers three preset coach prompts plus a text prompt. The coach matches regular expressions to canned lesson-based answers; unmatched prompts return a generic hint. It is not a live model or external AI service.
+
+### 3. Paraphrase Pit Stop
+
+- Three multiple-choice questions with immediate feedback, selected-option styling, and a score out of 3:
+  1. Preserve the source meaning.
+  2. Identify a synonym-only trap.
+  3. Identify a structural rewrite that preserves meaning.
+- Repeated selections overwrite the selected answer and increment a local attempt counter; there is no attempt limit.
+- Correct answers are stored in browser state, and pit progress is included in presence.
+
+### 4. Message Remix and Academic Transfer
+
+- Step 1 assigns a wall message from another device, selected deterministically using a hash of the local device key. If none is available, it uses a fixed sample sentence. The UI asks the student to rephrase it, but does not assess or submit that task separately.
+- Step 2 provides a fixed academic source sentence about extracurricular activities, with a word counter and a free-text paraphrase field.
+- A student can proceed to the academic task only after entering non-whitespace text in the first task, unless a submission already exists.
+- Submitting requires nonempty academic text and checks the teacher’s `subOpen` flag. It stores both writing tasks, source/message metadata, score report, and timestamp, then opens Stage 5.
+
+### 5. Feedback and revision
+
+- Displays the student's report, class summary, common difficulties, and (after teacher reveal) top-three awards.
+- Revision field runs the same local heuristic and updates the saved submission with revision and revised score.
+- Important behavior to review during reconstruction: the initial academic submission and report are available to the student who submitted them, but class summary reads the shared submissions collection. Visibility depends on the database read rules and is not independently authorized.
+
+## Teacher interface
+
+Teacher tabs:
+
+- **Live:** counts joined/online, messages, students who cleared Pit Stop, and submissions; stage distribution; full-screen QR action.
+- **Students:** display name, online indicator, stage, Pit Stop count, submission status, and score.
+- **Results:** class summary, difficulty counts, ranked responses, revisions, and three rubric-based award suggestions. Teacher can reveal/hide awards to students.
+- **Controls:** set class stage; toggle wall and submissions; run the wall spotlight; start a new section; erase current section; export CSV; copy/show join link; leave teacher mode.
+
+Teacher registration/login is not a real account workflow. The default database and class-code fields are hidden. First use writes `hs('wc'+pin)` to `ctl/ph`; later access compares this client-generated hash. A “Try demo” mode uses local-only state. “Leave teacher mode” clears `wc_t`, but the PIN and data are not handled by a backend identity system.
+
+## QR and link behavior
+
+- Teacher page builds a URL from the current page, stripping a trailing `teacher`/`teacher.html` to target the student page.
+- If a non-default database is configured, database and room are placed in the URL fragment. The default URL does not carry a classroom-specific invitation token.
+- QR images are generated by `qrcodejs` loaded dynamically from cdnjs. A link can be copied if QR generation fails.
+- QR join is an ordinary link/display-name entry, not registration or a secure invitation.
+
+## Scoring and awards
+
+The academic paraphrase assessor is a deterministic client-side heuristic (details in [DATA_STRUCTURE_ANALYSIS.md](DATA_STRUCTURE_ANALYSIS.md)):
+
+- Counts four broad idea categories through keyword regexes: activity/participation, social side, skills, personal development.
+- Computes content-word overlap against the fixed source using a stop list and crude six-character stems.
+- Detects exact word runs and shared word trigrams as copying signals.
+- Estimates structure change from first two tokens, trigram overlap, and content-word overlap.
+- Detects a fixed list of negation/negative and overclaim terms.
+- Combines these into a 0–100 score, caps for suspected copying/changed meaning, and flags `swap`, `lost`, `changed`, and `structure`.
+- Uses the same score for revisions. Class average and award ranking are derived from those values.
+
+It does not semantically understand a paraphrase; keywords can miss valid synonyms and can reward superficial matches. Preserve the explicit “indicative score” and teacher-review caveats, or replace it only through a documented educational assessment decision.
+
+## Navigation and state flow
+
+1. `index.html` normally displays home; `teacher.html` displays login unless `wc_t=1` in local storage.
+2. Student enters a display name and is associated with current `ctl.session` (or legacy `s0`).
+3. The app polls control data, then current session data selected by student stage or teacher mode.
+4. On section/session change, student progress and assignment reset but display name is retained; client pending writes for old student paths are filtered.
+5. Submit moves student to results; revision updates submission; teacher controls update shared `ctl` data.
+
+See [DATA_STRUCTURE_ANALYSIS.md](DATA_STRUCTURE_ANALYSIS.md) for the exact legacy path map and [PROPOSED_ARCHITECTURE.md](PROPOSED_ARCHITECTURE.md) for proposed, safer replacements.

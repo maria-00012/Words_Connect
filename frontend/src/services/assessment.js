@@ -11,12 +11,12 @@ const OVR = /\b(always|guarantee\w*|definitely|certainly|ensure\w*|must|every st
 const tokenize = (text) => text.toLowerCase().replace(/’/g, "'").match(/[a-z]+(?:'[a-z]+)?/g) || [];
 const stem = (word) => word.replace(/'s$/, '').replace(/(ations|ation|ions|ion|ing|ed|es|s|ly|ment)$/, '').slice(0, 6);
 
-export function assessParaphrase(text) {
+export function assessParaphrase(text, sourceSentence = SOURCE_SENTENCE) {
   const lower = text.toLowerCase();
   const words = tokenize(text);
   const count = words.length;
   const content = words.filter((word) => !STOP.has(word));
-  const sourceWords = tokenize(SOURCE_SENTENCE);
+  const sourceWords = tokenize(sourceSentence || SOURCE_SENTENCE);
   const sourceContent = new Set(sourceWords.filter((word) => !STOP.has(word)).map(stem));
   const overlap = content.length ? content.filter((word) => sourceContent.has(stem(word))).length / content.length : 1;
   let longestRun = 0;

@@ -319,6 +319,82 @@ small { font-size: .78rem; }
 .invite-row > div { min-width: 0; display: grid; }
 .invite-row > div span { overflow: hidden; color: var(--muted); font-size: .76rem; text-overflow: ellipsis; }
 
+/* Section-aware learning and teacher assessment workspace */
+.common-questions { display: grid; gap: 7px; margin-top: 12px; }
+.common-question { border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: var(--surface); }
+.common-question summary { min-height: 28px; display: flex; align-items: center; color: var(--ink); font-weight: 750; cursor: pointer; }
+.common-question p { margin: 8px 0 0; color: var(--muted); font-size: .88rem; }
+.teacher-help { margin: 16px 0 0; border-top: 1px solid var(--border); padding-top: 12px; color: var(--teal); font-size: .88rem; font-weight: 700; }
+.student-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 12px 0; }
+.student-filters .field { margin: 0; }
+.student-management-list, .results-student-list, .archived-report-list { display: grid; gap: 9px; }
+.student-management-row { width: 100%; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; border: 1px solid var(--border); border-radius: 13px; padding: 12px; background: white; color: var(--ink); text-align: left; cursor: pointer; }
+.student-management-row:hover, .student-management-row:focus-visible { border-color: var(--green); background: #f8fbf7; }
+.student-management-row .student-row-main { display: grid; gap: 4px; }
+.student-management-row .student-row-main span { overflow-wrap: anywhere; }
+.student-row-badges { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 5px; }
+.status-active { background: #eaf6e9; color: #2b6b4f; }
+.status-reviewed { background: #e7f5ed; color: #267052; }
+.status-pending { background: #fff2db; color: #805b12; }
+.results-student-group { border: 1px solid var(--border); border-radius: 14px; padding: 12px; background: #fff; }
+.results-student-group > summary { min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; list-style-position: inside; }
+.results-student-group > summary span { display: grid; gap: 3px; }
+.results-student-group > summary small { color: var(--muted); }
+.results-student-group > .form-actions { margin: 8px 0; }
+.submission-list { display: grid; gap: 10px; }
+.submission-detail-card { min-width: 0; border: 1px solid #e2eae4; border-radius: 14px; padding: 12px; background: #fbfcfa; overflow-wrap: anywhere; }
+.submission-detail-card .section-heading { align-items: flex-start; }
+.submission-detail-card .section-heading > div { display: grid; justify-items: start; gap: 5px; }
+.submission-detail-card time { color: var(--muted); font-size: .72rem; text-align: right; }
+.source-context, .complete-response, .automated-feedback { margin-top: 9px; border-radius: 11px; padding: 10px; background: var(--surface); }
+.source-context p, .complete-response p, .automated-feedback p { margin: 5px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.complete-response { background: #f0f7ef; }
+.automated-feedback { color: #445f55; font-size: .82rem; }
+.automated-feedback > span { margin-left: 7px; color: var(--teal); font-weight: 850; }
+.automated-feedback ul { margin: 7px 0 0; padding-left: 20px; }
+.grading-panel { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px; }
+.teacher-assessment-panel { margin-top: 12px; border: 1px solid #d9e9df; border-radius: 13px; padding: 11px; background: #f2f8f3; }
+.teacher-assessment-panel p { margin: 7px 0 0; overflow-wrap: anywhere; }
+.grading-panel .field { margin-top: 8px; }
+.grading-panel .form-actions { margin-top: 9px; }
+.teacher-detail-modal { width: min(100%, 900px); }
+.student-detail-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 10px 0; }
+.student-detail-summary p { display: grid; gap: 4px; margin: 0; border-radius: 11px; padding: 9px; background: var(--surface); font-size: .82rem; overflow-wrap: anywhere; }
+.student-detail-summary code { color: var(--muted); font-size: .72rem; }
+.detail-section { margin: 10px 0; }
+.history-entry, .revision-entry { display: grid; gap: 4px; margin: 8px 0; border-radius: 11px; padding: 10px; background: var(--surface); overflow-wrap: anywhere; }
+.history-entry p, .revision-entry p { margin: 2px 0; white-space: pre-wrap; }
+.history-entry span, .revision-entry span { color: var(--muted); font-size: .78rem; }
+.section-rename { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; margin-top: 12px; }
+.section-rename .field { margin: 0; }
+.managed-section-row, .managed-question { display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid #e6ede7; padding: 10px 0; }
+.managed-section-row > div:first-child, .managed-question > div:first-child { min-width: 0; display: grid; gap: 4px; overflow-wrap: anywhere; }
+.managed-section-row small, .managed-question small { color: var(--muted); font-size: .74rem; }
+.managed-question p { margin: 0; font-size: .84rem; }
+.manager-form { display: grid; gap: 8px; margin-top: 14px; border-top: 1px solid var(--border); padding-top: 13px; }
+.manager-form h4 { margin: 0; }
+.option-editor { display: grid; gap: 7px; }
+.option-row { display: grid; grid-template-columns: 30px minmax(0, 1fr) 36px; align-items: center; gap: 6px; }
+.option-row > label { display: grid; place-items: center; }
+.option-row input[type="radio"], .membership-row input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--teal); }
+.membership-row { display: flex; align-items: center; gap: 10px; border-bottom: 1px solid #e6ede7; padding: 10px 0; cursor: pointer; }
+.membership-row span { min-width: 0; display: grid; gap: 2px; }
+.membership-row small { color: var(--muted); font-size: .75rem; overflow-wrap: anywhere; }
+.student-row-button { width: 100%; border: 0; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
+.student-row-button:hover { background: var(--surface); }
+.attempt-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin-top: 12px; }
+.attempt-comparison > div { min-width: 0; border-radius: 13px; padding: 11px; background: var(--surface); overflow-wrap: anywhere; }
+.attempt-comparison p { white-space: pre-wrap; }
+.attempt-comparison strong { color: var(--teal); }
+.attempt-comparison small { color: var(--muted); font-size: .68rem; font-weight: 500; }
+.attempt-comparison > .status-message { grid-column: 1 / -1; }
+.revision-history { margin-top: 13px; border-top: 1px solid var(--border); padding-top: 10px; }
+.revision-history h3 { font-size: 1rem; }
+.spotlight-actions { flex-wrap: wrap; }
+.spotlight-actions .btn { min-height: 44px; }
+.archived-report-list { max-height: 70vh; overflow-y: auto; }
+.results-student-group .submission-detail-card { margin-top: 8px; }
+
 /* Profile */
 .profile-grid { display: grid; grid-template-columns: minmax(220px, .72fr) minmax(330px, 1.28fr); gap: 12px; align-items: start; }
 .profile-grid .card, .account-note { margin: 0 0 12px; }
@@ -446,4 +522,19 @@ small { font-size: .78rem; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+@media (max-width: 680px) {
+  .student-management-row { grid-template-columns: minmax(0, 1fr); }
+  .student-row-badges { grid-column: auto; }
+  .managed-section-row, .managed-question { align-items: stretch; flex-direction: column; }
+  .managed-section-row .form-actions, .managed-question .form-actions { width: 100%; flex-wrap: wrap; }
+  .section-rename { grid-template-columns: 1fr; }
+  .section-rename > .btn { width: 100%; }
+  .attempt-comparison { grid-template-columns: 1fr; }
+  .attempt-comparison > .status-message { grid-column: auto; }
+  .submission-detail-card .section-heading { flex-direction: column; }
+  .submission-detail-card time { text-align: left; }
+  .results-student-group > summary { align-items: flex-start; flex-direction: column; }
+  .student-detail-modal { max-height: 94dvh; }
+  .spotlight-actions .btn { flex: 1 1 calc(50% - 6px); }
 }

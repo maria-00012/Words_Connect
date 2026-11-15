@@ -1,119 +1,207 @@
 import { useEffect, useMemo, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import { Activity, ArrowDownToLine, ArrowLeft, ArrowRight, Clipboard, Eye, EyeOff, MessageSquare, MonitorPlay, Plus, RotateCcw, ShieldCheck, UsersRound, X } from 'lucide-react';
+import { Activity, ArrowDownToLine, ArrowLeft, ArrowRight, Clipboard, Eye, EyeOff, MessageSquare, MonitorPlay, Pause, Play, Plus, RotateCcw, ShieldCheck, UsersRound } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useData } from '../../context/DataContext.jsx';
 import { Button, Card, Chip, EmptyState, Metric, PageTitle } from '../../components/ui.jsx';
 import { createId, studentInviteUrl } from '../../services/mockApi.js';
-import { feedbackLabels, issueList } from '../../services/assessment.js';
+import { studentGradeSummary, officialRankings } from '../../services/grading.js';
+import { SectionSummary, StudentDetailModal, SubmissionCard, Modal, QuizEditor, ExerciseEditor } from './TeacherComponents.jsx';
 
 const STAGES = ['Wall', 'Learn', 'Pit Stop', 'Remix', 'Results'];
 const TABS = ['Live', 'Students', 'Results', 'Controls'];
+const activityLabels = { appreciation: 'Appreciation Wall', 'message-remix': 'Message Remix', 'academic-transfer': 'Academic Transfer', revision: 'Revision' };
 const expiryLabel = (expiresAt) => {
   const hours = Math.max(1, Math.ceil((expiresAt - Date.now()) / 3600000));
   return hours < 24 ? `EXPIRES IN ${hours} HOURS` : `EXPIRES IN ${Math.ceil(hours / 24)} DAYS`;
 };
 
-function ranking(submissions) {
-  if (!submissions.length) return [];
-  const used = new Set();
-  const pick = (sort, eligible = submissions) => {
-    const remaining = eligible.filter((item) => !used.has(item.userId));
-    const candidate = [...(remaining.length ? remaining : submissions.filter((item) => !used.has(item.userId)))].sort(sort)[0];
-    if (candidate) used.add(candidate.userId);
-    return candidate;
+function csvText(value) {
+  let text = String(value ?? '');
+  if (/^[=+\-@]/.test(text)) text = `'${text}`;
+  return `"${text.replaceAll('"', '""')}"`;
+}
+
+function downloadCsv(section, users) {
+  const fields = ['Student name', 'Student ID', 'Section ID', 'Section name', 'Activity type', 'Original prompt', 'Original classmate message', 'Original author', 'Recipient', 'Student response', 'Automated score', 'Official teacher mark', 'Teacher feedback', 'Submission status', 'Review status', 'Submitted at', 'Parent submission ID'];
+  const rows = section.submissions.map((record) => {
+    const student = users.find((item) => item.id === record.studentId);
+    return [student?.name, record.studentId, section.id, section.name, activityLabels[record.type] || record.type, record.prompt, record.sourceMessage?.text, record.sourceMessage?.author, record.recipient, record.response, record.automatedResult?.score, record.grading?.officialMark, record.grading?.feedback, 'Submitted', record.grading?.status || 'pending', record.submittedAt ? new Date(record.submittedAt).toISOString() : '', record.parentSubmissionId];
+  });
+  const blob = new Blob(['\ufeff', [fields, ...rows].map((row) => row.map(csvText).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a'); anchor.href = url; anchor.download = `words-connect-${section.name.replace(/[^a-z0-9-]/gi, '-')}-results.csv`; anchor.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 500);
+}
+
+function sectionStudents(section, users) {
+  return users.filter((user) => user.role === 'student' && section?.studentIds.includes(user.id));
+}
+
+function livePitScore(student, section) {
+  const progress = section.progress[student.id] || {};
+  if (progress.pitCompleted) return progress.pitCompleted.score === progress.pitCompleted.total;
+  const answers = progress.pitAnswers || progress.pit || {};
+  const questions = section.quiz?.questions || [];
+  return questions.length > 0 && questions.every((question, index) => (answers[question.id] || answers[String(index)])?.choice === question.correctIndex);
+}
+
+function SpotlightDialog({ section, autoplay, setAutoplay, index, setIndex, onClose }) {
+  const wall = section?.wall || [];
+  const [timerReset, setTimerReset] = useState(0);
+  useEffect(() => {
+    if (!autoplay || wall.length < 2) return undefined;
+    const timer = window.setInterval(() => setIndex((current) => (current + 1) % wall.length), 6000);
+    return () => window.clearInterval(timer);
+  }, [autoplay, wall.length, timerReset, setIndex]);
+  useEffect(() => setIndex((current) => wall.length ? current % wall.length : 0), [section?.id, wall.length, setIndex]);
+  const position = wall.length ? index % wall.length : 0;
+  const post = wall[position];
+  const navigate = (direction) => {
+    if (wall.length < 2) return;
+    setIndex((current) => (current + direction + wall.length) % wall.length);
+    setTimerReset((current) => current + 1);
   };
-  const safe = submissions.filter((item) => !issueList(item.result).includes('changed') && !item.result.cp);
-  return [
-    { title: 'Meaning Keeper', label: 'Best meaning preservation', icon: '🔐', submission: pick((a, b) => b.result.m - a.result.m || b.result.score - a.result.score, safe) },
-    { title: 'Structure Shifter', label: 'Best restructuring', icon: '🔀', submission: pick((a, b) => b.result.re - a.result.re || b.result.nw - a.result.nw || b.result.score - a.result.score, safe) },
-    { title: 'Academic Precision', label: 'Strongest overall', icon: '🎓', submission: pick((a, b) => b.result.score - a.result.score || b.result.nw - a.result.nw) },
-  ];
+  return <Modal title="Appreciation Wall Spotlight" onClose={onClose} className="spotlight-modal"><div className="spotlight-content">
+    <small>{post ? `${position + 1} / ${wall.length} · ${post.author}${post.recipient ? ` → ${post.recipient}` : ''}` : 'NO CLASS MESSAGES'}</small><p>{post?.text || 'No messages yet.'}</p>
+    <div className="form-actions spotlight-actions"><Button variant="secondary" disabled={wall.length < 2} onClick={() => navigate(-1)} aria-label="Previous message"><ArrowLeft size={18} /> Previous</Button><Button variant="secondary" disabled={wall.length < 2} onClick={() => navigate(1)} aria-label="Next message"><ArrowRight size={18} /> Next</Button><Button variant={autoplay ? 'secondary' : 'lime'} onClick={() => setAutoplay((value) => !value)}>{autoplay ? <><Pause size={16} /> Pause autoplay</> : <><Play size={16} /> Play autoplay</>}</Button><Button variant="lime" onClick={onClose}>Close spotlight</Button></div>
+    <p className="fine-print">Autoplay advances every six seconds. Manual navigation restarts the timer.</p>
+  </div></Modal>;
 }
 
-function LiveTab({ students, wall, submissions, classroom, onShowQr }) {
-  const online = students.filter((student) => student.status === 'Active');
-  const cleared = students.filter((student) => Object.entries(student.progress.pit || {}).filter(([index, choice]) => choice.choice === [1, 0, 2][Number(index)]).length === 3).length;
-  return <div className="tab-content"><Button variant="lime" className="wide-qr" onClick={onShowQr}>▦ Show QR code for students <ArrowRight size={17} /></Button><div className="metrics-grid live-metrics"><Metric value={students.length} label="Joined" icon={UsersRound} /><Metric value={online.length} label="Online now" icon={Activity} /><Metric value={wall.length} label="Wall messages" icon={MessageSquare} /><Metric value={cleared} label="Pit stop cleared" /><Metric value={submissions.length} label="Submitted" /></div><Card><h3>Where is everyone?</h3><p className="muted">Student activity by learning stage</p>{STAGES.map((stage, index) => { const count = students.filter((student) => student.progress.stage === index).length; return <div className="stage-count" key={stage}><div><b>{index + 1} {stage}</b><span>{count}</span></div><div className="progress-line"><i style={{ width: `${students.length ? count / students.length * 100 : 0}%` }} /></div></div>; })}</Card><Card className="classroom-note"><div><Chip>ACTIVE CLASSROOM</Chip><h3>{classroom.name}</h3><p>Section activity updates here as learners move through the stages.</p></div><ShieldCheck size={24} /></Card></div>;
+function LiveTab({ section, students, onShowSpotlight, onShowQr }) {
+  const currentStageCounts = STAGES.map((_, index) => students.filter((student) => (section.progress[student.id]?.stage || 0) === index).length);
+  const completedPitStop = students.filter((student) => livePitScore(student, section)).length;
+  const writingSubmissions = section.submissions.filter((item) => ['message-remix', 'academic-transfer'].includes(item.type)).length;
+  return <div className="tab-content"><Button variant="lime" className="wide-qr" onClick={onShowQr}>▦ Show QR code for students <ArrowRight size={17} /></Button>
+    <div className="metrics-grid live-metrics"><Metric value={students.length} label="Joined section" icon={UsersRound} /><Metric value={section.wall.length} label="Wall messages" icon={MessageSquare} /><Metric value={completedPitStop} label="Pit Stop completed" /><Metric value={writingSubmissions} label="Writing submissions" /><Metric value={section.submissions.filter((item) => item.grading?.status === 'pending').length} label="Pending reviews" /></div>
+    <Card><h3>Students’ current stage</h3><p className="muted">This shows the stage each student has selected. It does not indicate which earlier activities they completed.</p>{STAGES.map((stage, index) => <div className="stage-count" key={stage}><div><b>{index + 1}. {stage}</b><span>{currentStageCounts[index]}</span></div><div className="progress-line"><i style={{ width: `${students.length ? currentStageCounts[index] / students.length * 100 : 0}%` }} /></div></div>)}</Card>
+    <Card><h3>Completed activities</h3><div className="metrics-grid"><Metric value={completedPitStop} label="Pit Stop fully correct" /><Metric value={section.submissions.filter((item) => item.type === 'appreciation').length} label="Appreciation messages" /><Metric value={section.submissions.filter((item) => item.type === 'academic-transfer').length} label="Academic submissions" /></div></Card>
+    <Card className="classroom-note"><div><Chip>{section.name.toUpperCase()} · {section.status === 'archived' ? 'ARCHIVED' : 'OPEN'}</Chip><h3>{section.name}</h3><p>Presence tracking and cross-device updates are not available in this local demo.</p></div><ShieldCheck size={24} /></Card>
+    <Card><div className="section-heading"><div><h3>Appreciation Wall Spotlight</h3><p className="muted">Project class messages with manual navigation or autoplay.</p></div><Button variant="lime" onClick={onShowSpotlight}><MonitorPlay size={17} /> Open spotlight</Button></div></Card>
+  </div>;
 }
 
-function StudentsTab({ students }) {
-  return <Card><div className="section-heading"><div><h3>Students</h3><p className="muted">Progress in the current section.</p></div><Chip>{students.length} learners</Chip></div>{students.length ? <div className="student-list">{students.map((student) => { const pit = Object.entries(student.progress.pit || {}).filter(([index, item]) => item.choice === [1, 0, 2][Number(index)]).length; const submission = student.progress.submission; return <article className="student-row" key={student.id}><span className={`presence-dot ${student.id !== 'u-student' ? 'is-online' : ''}`} /><div className="student-row-main"><strong>{student.name}</strong><span>Stage {student.progress.stage + 1} · Pit {pit}/3{submission ? ` · Score ${submission.result.score}` : ''}</span></div><span className={`submission-state ${submission ? 'submitted' : ''}`}>{submission ? '✓ Submitted' : 'In progress'}</span></article>; })}</div> : <EmptyState title="No students have joined yet." />}</Card>;
+function StudentsTab({ section, students, users, onOpenStudent }) {
+  const [search, setSearch] = useState('');
+  const [stageFilter, setStageFilter] = useState('all');
+  const [submissionFilter, setSubmissionFilter] = useState('all');
+  const [gradingFilter, setGradingFilter] = useState('all');
+  const [sort, setSort] = useState('name');
+  const filtered = useMemo(() => students.filter((student) => {
+    const summary = studentGradeSummary(student.id, section.submissions);
+    const currentStage = section.progress[student.id]?.stage || 0;
+    const matchesName = `${student.name} ${student.email} ${student.id}`.toLowerCase().includes(search.toLowerCase());
+    return matchesName && (stageFilter === 'all' || currentStage === Number(stageFilter)) && (submissionFilter === 'all' || (submissionFilter === 'submitted' ? summary.submitted : !summary.submitted)) && (gradingFilter === 'all' || (gradingFilter === 'reviewed' ? summary.gradingStatus === 'Reviewed' : summary.gradingStatus !== 'Reviewed'));
+  }), [students, section, search, stageFilter, submissionFilter, gradingFilter]);
+  const sorted = [...filtered].sort((a, b) => {
+    const left = studentGradeSummary(a.id, section.submissions); const right = studentGradeSummary(b.id, section.submissions);
+    if (sort === 'stage') return (section.progress[a.id]?.stage || 0) - (section.progress[b.id]?.stage || 0) || a.name.localeCompare(b.name);
+    if (sort === 'official') return (right.officialMark ?? -1) - (left.officialMark ?? -1) || a.name.localeCompare(b.name);
+    if (sort === 'auto') return (maxAutoScore(section, b.id) ?? -1) - (maxAutoScore(section, a.id) ?? -1) || a.name.localeCompare(b.name);
+    return a.name.localeCompare(b.name);
+  });
+  return <div className="tab-content"><Card><div className="section-heading"><div><h3>Students</h3><p className="muted">Manage and review students assigned to {section.name}.</p></div><Chip>{students.length} learners</Chip></div>
+    <div className="student-filters"><label className="field">Search<input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Name, email, or student ID" /></label><label className="field">Current stage<select value={stageFilter} onChange={(event) => setStageFilter(event.target.value)}><option value="all">All stages</option>{STAGES.map((stage, index) => <option key={stage} value={index}>{stage}</option>)}</select></label><label className="field">Submission<select value={submissionFilter} onChange={(event) => setSubmissionFilter(event.target.value)}><option value="all">All statuses</option><option value="submitted">Submitted</option><option value="in-progress">In progress</option></select></label><label className="field">Grading<select value={gradingFilter} onChange={(event) => setGradingFilter(event.target.value)}><option value="all">All grading states</option><option value="pending">Pending review</option><option value="reviewed">Reviewed</option></select></label><label className="field">Sort by<select value={sort} onChange={(event) => setSort(event.target.value)}><option value="name">Name</option><option value="stage">Current stage</option><option value="auto">Automated score</option><option value="official">Official mark</option></select></label></div>
+    {sorted.length ? <div className="student-management-list">{sorted.map((student) => {
+      const progress = section.progress[student.id] || {};
+      const grading = studentGradeSummary(student.id, section.submissions);
+      const pitScore = progress.pitCompleted?.score ?? (section.quiz.questions || []).filter((item, index) => (progress.pitAnswers?.[item.id] || progress.pit?.[String(index)])?.choice === item.correctIndex).length;
+      return <button type="button" className="student-management-row" key={student.id} onClick={() => onOpenStudent(student)}><span className="student-row-main"><strong>{student.name}</strong><span>ID: {student.id} · Stage {Math.min(5, (progress.stage || 0) + 1)} · Pit Stop {pitScore}/{progress.pitCompleted?.total || section.quiz.questions.length}</span></span><span className="student-row-badges"><Chip className={grading.submitted ? 'status-reviewed' : 'status-pending'}>{grading.submitted ? 'Submitted' : 'In progress'}</Chip><Chip>{grading.officialMark == null ? 'Official mark —' : `Official ${grading.officialMark}/100`}</Chip><Chip className={grading.gradingStatus === 'Reviewed' ? 'status-reviewed' : 'status-pending'}>{grading.gradingStatus}</Chip>{maxAutoScore(section, student.id) != null && <Chip>Automated {maxAutoScore(section, student.id)}/100</Chip>}</span><ArrowRight size={17} /></button>;
+    })}</div> : <EmptyState title="No students match these filters." />}</Card></div>;
 }
 
-function ResultsTab({ submissions, reveal, onToggleReveal }) {
-  const avg = submissions.length ? Math.round(submissions.reduce((sum, item) => sum + item.result.score, 0) / submissions.length) : '—';
-  const counts = Object.fromEntries(Object.keys(feedbackLabels).map((key) => [key, submissions.filter((item) => issueList(item.result).includes(key)).length]));
-  const top = Object.keys(counts).sort((a, b) => counts[b] - counts[a]).filter((key) => counts[key] > 0)[0];
-  const awards = ranking(submissions);
-  return <div className="tab-content"><Card><div className="section-heading"><div><h3>Class results</h3><p className="muted">A formative snapshot to guide the next lesson.</p></div><Chip>{submissions.length} responses</Chip></div>{submissions.length ? <><div className="metrics-grid"><Metric value={submissions.length} label="Responses" /><Metric value={avg} label="Average score" /><Metric value={top ? feedbackLabels[top][0] : '—'} label="Most common focus" /></div>{Object.entries(feedbackLabels).map(([key, item]) => <div className="difficulty-line" key={key}><div><b>{item[0]}</b><span>{counts[key]} of {submissions.length}</span></div><div className="progress-line"><i style={{ width: `${counts[key] / submissions.length * 100}%` }} /></div></div>)}</> : <EmptyState title="No responses yet." />}</Card><Card><div className="section-heading"><div><h3>🏆 Top 3</h3><p className="muted">Rubric-based suggestions. Confirm with the original writing before announcing.</p></div><Button variant={reveal ? 'secondary' : 'lime'} onClick={onToggleReveal}>{reveal ? <><EyeOff size={16} /> Hide from students</> : <><Eye size={16} /> Reveal to students</>}</Button></div>{awards.length ? <div className="awards-grid">{awards.map((award) => <div className="award-card" key={award.title}><span>{award.icon}</span><b>{award.title}</b><strong>{award.submission?.studentName || '—'}</strong><small>{award.label}{award.submission && ` · ${award.submission.result.score}/100`}</small></div>)}</div> : <EmptyState title="Awards appear after submissions." />}</Card><Card><h3>Student responses</h3>{submissions.length ? <div className="response-list">{[...submissions].sort((a, b) => b.result.score - a.result.score).map((item) => <article key={item.userId} className="response-card"><div className="section-heading"><b>{item.studentName}</b><Chip>{item.result.score}/100</Chip></div><p>{item.academic}</p>{item.revision && <p><b>Revised:</b> {item.revision} <span className="muted">· {item.revisionResult?.score}/100</span></p>}</article>)}</div> : <EmptyState title="No submissions to review." />}</Card></div>;
+function maxAutoScore(section, studentId) {
+  const scores = section.submissions.filter((item) => item.studentId === studentId && item.automatedResult).map((item) => item.automatedResult.score);
+  return scores.length ? Math.max(...scores) : null;
 }
 
-function ControlsTab({ data, updateClassroom, addSection, setData, onShowSpotlight, onShowQr, submissions }) {
-  const [sectionName, setSectionName] = useState('');
-  const [message, setMessage] = useState('');
-  const toggle = (key) => updateClassroom({ [key]: !data.classroom[key] });
-  const startSection = () => {
-    if (!window.confirm('Start a new empty class section? Previous section data will stay in this demo.')) return;
-    const section = { id: createId('section'), name: sectionName.trim() || `Section ${String.fromCharCode(65 + data.sections.length)}`, createdAt: Date.now() };
-    addSection(section); setSectionName(''); setMessage(`${section.name} is now active.`);
-  };
-  const erase = () => {
-    if (!window.confirm('Erase the wall and student submissions in this demo section? This cannot be undone.')) return;
-    setData((current) => ({ ...current, wall: [], progress: Object.fromEntries(Object.entries(current.progress).map(([id, progress]) => [id, { ...progress, submission: null, revision: '', revisionResult: null }])) }));
-    setMessage('Current section data has been cleared.');
-  };
-  const downloadCsv = (rowsToExport, filename) => {
-    if (!rowsToExport.length) { setMessage('There are no responses to export yet.'); return; }
-    const fields = ['Name', 'Message from', 'Message', 'Task 1 paraphrase', 'Academic paraphrase', 'Score', 'Difficulties', 'Revision', 'Revised score'];
-    const quote = (value) => { let text = String(value ?? ''); if (/^[=+\-@]/.test(text)) text = `'${text}`; return `"${text.replaceAll('"', '""')}"`; };
-    const rows = rowsToExport.map((item) => [item.studentName, item.sourceAuthor || '', item.sourceMessage || '', item.remix, item.academic, item.result.score, issueList(item.result).map((key) => feedbackLabels[key][0]).join('; '), item.revision || '', item.revisionResult?.score || '']);
-    const blob = new Blob(['\ufeff', [fields, ...rows].map((row) => row.map(quote).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob); const anchor = document.createElement('a'); anchor.href = url; anchor.download = filename; anchor.click(); window.setTimeout(() => URL.revokeObjectURL(url), 500); setMessage('CSV downloaded.');
-  };
-  const exportCsv = () => downloadCsv(submissions, 'words-connect-results.csv');
-  return <div className="tab-content"><Card><h3>🎓 Class stage</h3><p className="muted">Students can join the teacher’s stage from their learning page.</p><div className="stage-controls">{STAGES.map((stage, index) => <Button key={stage} variant={data.classroom.stage === index ? 'primary' : 'secondary'} onClick={() => updateClassroom({ stage: index })}>{index + 1} {stage}</Button>)}</div></Card><Card><h3>Class controls</h3><div className="control-row"><div><b>Appreciation Wall</b><span>{data.classroom.wallOpen ? 'Students can post messages' : 'Posting is paused'}</span></div><Button variant="secondary" onClick={() => toggle('wallOpen')}>{data.classroom.wallOpen ? 'Open · tap to close' : 'Closed · tap to open'}</Button></div><div className="control-row"><div><b>Writing submissions</b><span>{data.classroom.submissionsOpen ? 'Students can submit their writing' : 'Submissions are paused'}</span></div><Button variant="secondary" onClick={() => toggle('submissionsOpen')}>{data.classroom.submissionsOpen ? 'Open · tap to close' : 'Closed · tap to open'}</Button></div><Button variant="secondary" onClick={onShowSpotlight}><MonitorPlay size={17} /> Spotlight wall (projector)</Button></Card><Card><h3>🔄 Next class section</h3><p className="muted">Starts a clean, empty section. Previous sections remain available in this prototype.</p><label className="field">Name of the new section <span className="field-hint">(optional)</span><input value={sectionName} onChange={(event) => setSectionName(event.target.value)} placeholder="e.g. Section B" /></label><div className="form-actions"><Button variant="lime" onClick={startSection}><Plus size={16} /> Start new section</Button><Button variant="danger" onClick={erase}><RotateCcw size={16} /> Erase this section’s data</Button></div>{message && <p className="status-message" role="status">{message}</p>}{(data.archives || []).length > 0 && <div className="section-history"><h4>Previous sections</h4>{data.archives.map((archive) => { const archivedSubmissions = Object.entries(archive.progress || {}).flatMap(([userId, progress]) => progress.submission ? [{ ...progress.submission, userId, studentName: progress.submission.studentName || data.users.find((person) => person.id === userId)?.name || 'Student', revision: progress.revision || progress.submission.revision, revisionResult: progress.revisionResult || progress.submission.revisionResult }] : []); return <div className="history-row" key={archive.section?.id}><div><b>{archive.section?.name || 'Archived section'}</b><span>{archive.wall?.length || 0} wall messages · {archivedSubmissions.length} submissions</span></div><Button variant="secondary" disabled={!archivedSubmissions.length} onClick={() => downloadCsv(archivedSubmissions, `words-connect-${(archive.section?.name || 'archive').replace(/[^a-z0-9-]/gi, '-')}.csv`)}><ArrowDownToLine size={15} /> Export</Button></div>; })}</div>}</Card><Card><h3>📥 Save results</h3><p className="muted">Export this class snapshot as a spreadsheet-ready CSV.</p><Button variant="secondary" onClick={exportCsv}><ArrowDownToLine size={16} /> Export CSV</Button></Card><Card><h3>📲 Student registration QR</h3><p className="muted">Students scan to open a mock classroom registration invitation.</p><Button variant="secondary" onClick={onShowQr}><Clipboard size={16} /> Manage classroom QR</Button></Card></div>;
+function ResultsTab({ section, students, users, onSaveGrade, onToggleReveal, onOpenStudent }) {
+  const reviewable = section.submissions;
+  const pending = reviewable.filter((item) => item.grading?.status !== 'reviewed').length;
+  const reviewed = reviewable.length - pending;
+  const officialMarks = reviewable.filter((item) => item.type !== 'revision' && item.grading?.status === 'reviewed' && item.grading.officialMark !== '' && Number.isFinite(Number(item.grading.officialMark))).map((item) => Number(item.grading.officialMark));
+  const averageOfficial = officialMarks.length ? Math.round(officialMarks.reduce((sum, value) => sum + value, 0) / officialMarks.length) : '—';
+  const rankings = officialRankings(reviewable, users);
+  return <div className="tab-content"><Card><div className="section-heading"><div><h3>Assessment overview</h3><p className="muted">Automated scores guide learning; official marks come from teacher review.</p></div><Chip>{section.name}</Chip></div><div className="metrics-grid"><Metric value={students.length} label="Students" /><Metric value={reviewable.length} label="Activity submissions" /><Metric value={pending} label="Pending review" /><Metric value={reviewed} label="Reviewed" /><Metric value={averageOfficial} label="Average official mark" /></div></Card>
+    <Card><div className="section-heading"><div><h3>Official class awards</h3><p className="muted">Rankings use reviewed teacher marks only. Automated scores are never treated as grades.</p></div><Button variant={section.settings.reveal ? 'secondary' : 'lime'} onClick={onToggleReveal}>{section.settings.reveal ? <><EyeOff size={16} /> Hide from students</> : <><Eye size={16} /> Reveal to students</>}</Button></div>{rankings.length ? <div className="awards-grid">{rankings.map((award, index) => <div className="award-card" key={award.studentId}><span>{['🥇', '🥈', '🥉'][index]}</span><b>{['First', 'Second', 'Third'][index]}</b><strong>{award.name}</strong><small>{award.mark}/100 official average · {award.reviewedCount} reviewed</small></div>)}</div> : <EmptyState title="Awards appear after reviewed official marks are saved." />}</Card>
+    <Card><div className="section-heading"><div><h3>Student assessment workspace</h3><p className="muted">Choose a student to review all activities and attempts.</p></div><Chip>{students.length} students</Chip></div>{students.length ? <div className="results-student-list">{students.map((student) => {
+      const records = reviewable.filter((item) => item.studentId === student.id).sort((a, b) => a.submittedAt - b.submittedAt);
+      const summary = studentGradeSummary(student.id, reviewable);
+      return <details className="results-student-group" key={student.id}><summary><span><b>{student.name}</b><small>{records.length} records · {summary.gradingStatus}</small></span><Chip>{summary.officialMark == null ? 'No official mark' : `${summary.officialMark}/100`}</Chip></summary><div className="form-actions"><Button variant="secondary" onClick={() => onOpenStudent(student)}>Open complete learning history</Button></div>{records.length ? records.map((record) => <SubmissionCard key={record.id} record={record} section={section} submissions={section.submissions} users={users} onSaveGrade={onSaveGrade} />) : <EmptyState title="No submissions from this student yet." />}</details>;
+    })}</div> : <EmptyState title="No students are assigned to this section." />}</Card></div>;
 }
 
-function Modal({ title, onClose, children, className = '' }) {
-  useEffect(() => { const onKey = (event) => event.key === 'Escape' && onClose(); window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey); }, [onClose]);
-  return <div className={`modal-backdrop ${className}`} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="modal-card" role="dialog" aria-modal="true" aria-label={title}><div className="modal-heading"><h2>{title}</h2><button className="icon-link" onClick={onClose} aria-label="Close"><X size={20} /></button></div>{children}</section></div>;
+function SectionRename({ section, updateSection }) {
+  const [name, setName] = useState(section.name);
+  return <form className="section-rename" onSubmit={(event) => { event.preventDefault(); if (name.trim()) updateSection(section.id, { name: name.trim() }); }}><label className="field">Section name<input value={name} onChange={(event) => setName(event.target.value)} /></label><Button variant="secondary" type="submit">Save name</Button></form>;
+}
+
+function ControlsTab({ data, section, users, updateSection, updateClassroom, createSection, setActiveSection, archiveSection, reopenSection, deleteSection, onMembershipChange, resetSection, onShowSpotlight, onShowQr, onViewArchive, message, setMessage }) {
+  const [newSectionName, setNewSectionName] = useState('');
+  const openSections = data.sections.filter((item) => item.status !== 'archived');
+  const archivedSections = data.sections.filter((item) => item.status === 'archived');
+  const startCreate = (event) => { event.preventDefault(); if (!newSectionName.trim()) return; createSection(newSectionName.trim()); setMessage(`${newSectionName.trim()} created. Activate it from Open sections when ready.`); setNewSectionName(''); };
+  const archive = (target) => { if (window.confirm(`Archive ${target.name}? Its students, submissions, grades and settings will remain available in archived reports.`)) { archiveSection(target.id); setMessage(`${target.name} archived. Its data was preserved.`); } };
+  const permanentlyDelete = (target) => { if (window.confirm(`Permanently delete ${target.name} and all of its students' activity, submissions, grades and feedback? This cannot be undone.`)) { deleteSection(target.id); setMessage(`${target.name} permanently deleted.`); } };
+  const clear = () => { if (section && window.confirm(`Permanently clear all activity, answers, submissions, revisions and teacher grades in ${section.name}? This cannot be undone. Section membership and assigned lesson content will remain.`)) { resetSection(section.id); setMessage(`${section.name} activity data was cleared.`); } };
+  const createQr = () => onShowQr();
+  return <div className="tab-content">
+    <Card><div className="section-heading"><div><h3>Current section</h3><p className="muted">Creating or switching sections does not clear or move their saved records.</p></div><Chip className="status-active">{section ? `${section.name} · Current` : 'No current section'}</Chip></div>{section ? <><div className="metrics-grid"><Metric value={sectionStudents(section, users).length} label="Students" /><Metric value={section.wall.length} label="Wall messages" /><Metric value={section.submissions.length} label="Activity records" /><Metric value={section.submissions.filter((item) => item.grading?.status !== 'reviewed').length} label="Pending reviews" /></div><SectionRename section={section} updateSection={updateSection} /><div className="form-actions"><Button variant="secondary" onClick={onShowSpotlight}><MonitorPlay size={16} /> Spotlight Wall</Button><Button variant="secondary" onClick={onShowQr}><Clipboard size={16} /> Classroom QR</Button><Button variant="danger" onClick={() => archive(section)}>Archive current section</Button><Button variant="danger" onClick={clear}><RotateCcw size={16} /> Reset this section’s activity</Button></div></> : <EmptyState title="No open section is selected.">Create a section or reopen an archived section to continue.</EmptyState>}</Card>
+    {section && <><Card><h3>Class stage and submission controls</h3><p className="muted">These settings belong to the current section.</p><div className="stage-controls">{STAGES.map((stage, index) => <Button key={stage} variant={section.settings.stage === index ? 'primary' : 'secondary'} onClick={() => updateClassroom({ stage: index }, section.id)}>{index + 1} {stage}</Button>)}</div><div className="control-row"><div><b>Appreciation Wall</b><span>{section.settings.wallOpen ? 'Students can post' : 'Posting is paused'}</span></div><Button variant="secondary" onClick={() => updateClassroom({ wallOpen: !section.settings.wallOpen }, section.id)}>{section.settings.wallOpen ? 'Close wall' : 'Open wall'}</Button></div><div className="control-row"><div><b>Writing submissions</b><span>{section.settings.submissionsOpen ? 'Students can submit' : 'Submissions are paused'}</span></div><Button variant="secondary" onClick={() => updateClassroom({ submissionsOpen: !section.settings.submissionsOpen }, section.id)}>{section.settings.submissionsOpen ? 'Close submissions' : 'Open submissions'}</Button></div></Card><QuizEditor section={section} updateSection={updateSection} /><ExerciseEditor section={section} updateSection={updateSection} />
+      <Card><div className="section-heading"><div><h3>Student membership</h3><p className="muted">Membership is section-specific. Historical records stay in their original section when membership changes.</p></div><Chip>{sectionStudents(section, users).length} students</Chip></div>{users.filter((item) => item.role === 'student').map((student) => <label className="membership-row" key={student.id}><input type="checkbox" checked={section.studentIds.includes(student.id)} onChange={(event) => onMembershipChange(student.id, section.id, event.target.checked)} /><span><b>{student.name}</b><small>{student.email} · {student.id}</small></span></label>)}</Card></>}
+    <Card><h3>Create a section</h3><p className="muted">This creates an empty section without switching away from the current one.</p><form className="section-rename" onSubmit={startCreate}><label className="field">New section name<input value={newSectionName} onChange={(event) => setNewSectionName(event.target.value)} placeholder="e.g. Section B" required /></label><Button variant="lime" type="submit"><Plus size={16} /> Create section</Button></form>{message && <p className="status-message" role="status">{message}</p>}</Card>
+    <Card><div className="section-heading"><div><h3>Open sections</h3><p className="muted">Switch the teacher dashboard context without moving any student records.</p></div><Chip>{openSections.length}</Chip></div>{openSections.length ? openSections.map((item) => <div className="managed-section-row" key={item.id}><div><b>{item.name}{item.id === data.activeSectionId ? ' · Current' : ''}</b><small>{sectionStudents(item, users).length} students · {item.submissions.length} activity records</small></div><div className="form-actions">{item.id !== data.activeSectionId && <Button variant="lime" onClick={() => setActiveSection(item.id)}>Make current</Button>}<Button variant="secondary" onClick={() => archive(item)}>Archive</Button></div></div>) : <EmptyState title="No open sections." />}</Card>
+    <Card><div className="section-heading"><div><h3>Archived sections</h3><p className="muted">View historical reports without activating the section. Reopening preserves its data.</p></div><Chip>{archivedSections.length}</Chip></div>{archivedSections.length ? archivedSections.map((item) => <div className="managed-section-row archived-section-row" key={item.id}><div><b>{item.name}</b><small>Archived {item.archivedAt ? new Date(item.archivedAt).toLocaleDateString() : 'date not recorded'} · {sectionStudents(item, users).length} students · {item.submissions.length} submissions</small></div><div className="form-actions"><Button variant="secondary" onClick={() => onViewArchive(item.id, 'reports')}>View reports</Button><Button variant="secondary" onClick={() => onViewArchive(item.id, 'students')}>View students</Button><Button variant="secondary" onClick={() => downloadCsv(item, users)}><ArrowDownToLine size={15} /> Export CSV</Button><Button variant="lime" onClick={() => { reopenSection(item.id); setMessage(`${item.name} reopened as the current section.`); }}>Reopen</Button><Button variant="danger" onClick={() => permanentlyDelete(item)}>Delete permanently</Button></div></div>) : <EmptyState title="No archived sections yet." />}</Card>
+    <Card><h3>Results export</h3><p className="muted">Export stored activity responses, source context, automated results, official marks, teacher feedback and review status.</p><Button variant="secondary" disabled={!section} onClick={() => section && downloadCsv(section, users)}><ArrowDownToLine size={16} /> Export current section CSV</Button></Card>
+  </div>;
 }
 
 export function TeacherDashboard() {
-  const { user } = useAuth();
-  const { data, updateClassroom, addSection, addInvite, setData } = useData();
+  const { users, setUsers } = useAuth();
+  const { data, activeSection, updateSection, updateClassroom, createSection, setActiveSection, archiveSection, reopenSection, deleteSection, setStudentSection, resetSection, addInvite, saveGrade } = useData();
   const [tab, setTab] = useState(0);
   const [showQR, setShowQR] = useState(false);
   const [spotlight, setSpotlight] = useState(false);
   const [spotIndex, setSpotIndex] = useState(0);
+  const [autoplay, setAutoplay] = useState(false);
   const [copyState, setCopyState] = useState('Copy student link');
-  const students = useMemo(() => data.users.filter((person) => person.role === 'student').map((person) => ({ ...person, progress: data.progress[person.id] || { stage: 0, pit: {}, submission: null }, status: 'Active' })), [data.users, data.progress]);
-  const submissions = useMemo(() => Object.entries(data.progress).flatMap(([userId, progress]) => progress.submission ? [{ ...progress.submission, userId, studentName: progress.submission.studentName || data.users.find((person) => person.id === userId)?.name || 'Student', revision: progress.revision || progress.submission.revision, revisionResult: progress.revisionResult || progress.submission.revisionResult }] : []), [data.progress, data.users]);
-  const activeSection = data.sections.find((section) => section.id === data.activeSectionId);
-  const activeInvite = data.invites.find((invite) => invite.type === 'student' && invite.status === 'Active' && invite.expiresAt > Date.now());
+  const [selectedStudent, setSelectedStudent] = useState(null);
+  const [archiveView, setArchiveView] = useState(null);
+  const [archiveStudent, setArchiveStudent] = useState(null);
+  const [controlsMessage, setControlsMessage] = useState('');
+  const section = activeSection;
+  const students = useMemo(() => section ? sectionStudents(section, users) : [], [section, users]);
+  const activeInvite = data.invites.find((invite) => invite.type === 'student' && invite.status === 'Active' && invite.expiresAt > Date.now() && invite.sectionId === section?.id);
   const inviteUrl = activeInvite ? studentInviteUrl(activeInvite.token) : '';
   const createQr = () => {
-    const invite = { token: createId('invite'), type: 'student', classroomId: data.classroom.id, classroomName: data.classroom.name, status: 'Active', expiresAt: Date.now() + 24 * 60 * 60 * 1000 };
+    if (!section) return;
+    const invite = { token: createId('invite'), type: 'student', classroomId: data.classroom.id, classroomName: data.classroom.name, sectionId: section.id, sectionName: section.name, status: 'Active', expiresAt: Date.now() + 24 * 60 * 60 * 1000 };
     addInvite(invite); setShowQR(true); setCopyState('Copy student link');
   };
+  const openQr = () => { if (activeInvite) setShowQR(true); else createQr(); };
   const copyLink = async () => { try { await navigator.clipboard.writeText(inviteUrl); setCopyState('Copied!'); } catch { setCopyState('Select and copy the link below'); } };
-  const wall = data.wall;
-  useEffect(() => {
-    if (!spotlight || wall.length < 2) return undefined;
-    const timer = window.setInterval(() => setSpotIndex((index) => (index + 1) % wall.length), 6000);
-    return () => window.clearInterval(timer);
-  }, [spotlight, wall.length]);
-  const spot = wall[spotIndex % Math.max(wall.length, 1)];
-  const closeSpotlight = () => setSpotlight(false);
-  const tabContent = [
-    <LiveTab key="live" students={students} wall={wall} submissions={submissions} classroom={data.classroom} onShowQr={() => setShowQR(true)} />,
-    <StudentsTab key="students" students={students} />,
-    <ResultsTab key="results" submissions={submissions} reveal={data.classroom.reveal} onToggleReveal={() => updateClassroom({ reveal: !data.classroom.reveal })} />,
-    <ControlsTab key="controls" data={data} updateClassroom={updateClassroom} addSection={addSection} setData={setData} onShowSpotlight={() => { setSpotIndex(0); setSpotlight(true); }} onShowQr={createQr} submissions={submissions} />,
-  ];
-  return <div className="teacher-view"><PageTitle eyebrow="TEACHER DASHBOARD" title={activeSection?.name || data.classroom.name} description={<><span className="live-dot" /> Demo classroom · {data.classroom.name}</>} action={<Chip>{submissions.length} submissions</Chip>} /><div className="teacher-tabs" role="tablist" aria-label="Teacher dashboard sections">{TABS.map((label, index) => <button key={label} role="tab" aria-selected={tab === index} onClick={() => setTab(index)}>{label}</button>)}</div>{tabContent[tab]}
-    {showQR && <Modal title="📲 Invite students to your class" onClose={() => setShowQR(false)}><div className="qr-content">{activeInvite ? <><div className="qr-frame"><QRCodeSVG value={inviteUrl} size={210} includeMargin /></div><Chip>{expiryLabel(activeInvite.expiresAt)}</Chip><p>Students scan this code to join <b>{data.classroom.name}</b>.</p><div className="copy-link-row"><input value={inviteUrl} readOnly aria-label="Student invitation link" onFocus={(event) => event.target.select()} /><Button onClick={copyLink}><Clipboard size={16} /> {copyState}</Button></div></> : <><div className="invite-missing"><p>There isn’t an active registration invitation yet.</p><Button onClick={createQr}><Plus size={16} /> Create classroom QR</Button></div></>}</div></Modal>}
-    {spotlight && <Modal title="Appreciation Wall" onClose={closeSpotlight} className="spotlight-modal"><div className="spotlight-content"><small>{spot ? `${spotIndex + 1} / ${wall.length} · ${spot.author}${spot.recipient ? ` → ${spot.recipient}` : ''}` : 'CLASS MESSAGES'}</small><p>{spot?.text || 'No messages yet.'}</p><div className="form-actions"><Button variant="secondary" onClick={() => setSpotIndex((index) => (index - 1 + wall.length) % Math.max(wall.length, 1))}><ArrowLeft size={18} /></Button><Button variant="secondary" onClick={() => setSpotIndex((index) => (index + 1) % Math.max(wall.length, 1))}><ArrowRight size={18} /></Button><Button variant="lime" onClick={closeSpotlight}>Close spotlight</Button></div></div></Modal>}
+  const saveGradeForSection = (sectionId) => (recordId, grade) => saveGrade(recordId, grade, sectionId);
+  const onMembershipChange = (studentId, sectionId, isMember) => {
+    setStudentSection(studentId, sectionId, isMember);
+    const fallback = data.sections.find((item) => item.id !== sectionId && item.status !== 'archived' && item.studentIds.includes(studentId))?.id;
+    setUsers((current) => current.map((user) => user.id === studentId ? { ...user, sectionId: isMember ? sectionId : fallback } : user));
+  };
+  const openSpotlight = () => { setSpotIndex(0); setAutoplay(false); setSpotlight(true); };
+  const tabContent = section ? [
+    <LiveTab key="live" section={section} students={students} onShowQr={openQr} onShowSpotlight={openSpotlight} />,
+    <StudentsTab key="students" section={section} students={students} users={users} onOpenStudent={setSelectedStudent} />,
+    <ResultsTab key="results" section={section} students={students} users={users} onSaveGrade={saveGradeForSection(section.id)} onToggleReveal={() => updateClassroom({ reveal: !section.settings.reveal }, section.id)} onOpenStudent={setSelectedStudent} />,
+    <ControlsTab key="controls" data={data} section={section} users={users} updateSection={updateSection} updateClassroom={updateClassroom} createSection={createSection} setActiveSection={setActiveSection} archiveSection={archiveSection} reopenSection={reopenSection} deleteSection={deleteSection} onMembershipChange={onMembershipChange} resetSection={resetSection} onShowSpotlight={openSpotlight} onShowQr={openQr} onViewArchive={(sectionId, mode) => setArchiveView({ sectionId, mode })} message={controlsMessage} setMessage={setControlsMessage} />,
+  ] : [<Card key="none"><EmptyState title="No open section is selected.">Create a section in Controls, or reopen an archived section.</EmptyState></Card>, <Card key="students"><EmptyState title="No active section." /></Card>, <Card key="results"><EmptyState title="No active section." /></Card>, <ControlsTab key="controls" data={data} section={null} users={users} updateSection={updateSection} updateClassroom={updateClassroom} createSection={createSection} setActiveSection={setActiveSection} archiveSection={archiveSection} reopenSection={reopenSection} deleteSection={deleteSection} onMembershipChange={onMembershipChange} resetSection={resetSection} onShowSpotlight={openSpotlight} onShowQr={openQr} onViewArchive={(sectionId, mode) => setArchiveView({ sectionId, mode })} message={controlsMessage} setMessage={setControlsMessage} />];
+  const archive = archiveView ? data.sections.find((item) => item.id === archiveView.sectionId) : null;
+  const selectedStudentSection = selectedStudent ? (archiveStudent?.section || section) : null;
+  const closeArchive = () => { setArchiveView(null); setArchiveStudent(null); };
+  return <div className="teacher-view"><PageTitle eyebrow="TEACHER DASHBOARD" title={section?.name || 'Class sections'} description={<><span className="live-dot" /> {section ? `${data.classroom.name} · local demo data` : 'No current section selected'}</>} action={section && <Chip>{section.submissions.length} activity records</Chip>} /><div className="teacher-tabs" role="tablist" aria-label="Teacher dashboard sections">{TABS.map((label, index) => <button key={label} role="tab" aria-selected={tab === index} onClick={() => setTab(index)}>{label}</button>)}</div>{tabContent[tab]}
+    {showQR && <Modal title="Student classroom invitation" onClose={() => setShowQR(false)}><div className="qr-content">{activeInvite ? <><div className="qr-frame"><QRCodeSVG value={inviteUrl} size={210} includeMargin /></div><Chip>{expiryLabel(activeInvite.expiresAt)}</Chip><p>Students scan this code to join <b>{activeInvite.sectionName}</b>.</p><div className="copy-link-row"><input value={inviteUrl} readOnly aria-label="Student invitation link" onFocus={(event) => event.target.select()} /><Button onClick={copyLink}><Clipboard size={16} /> {copyState}</Button></div></> : <div className="invite-missing"><p>There isn’t an active invitation for this section.</p><Button onClick={createQr}><Plus size={16} /> Create classroom QR</Button></div>}</div></Modal>}
+    {spotlight && section && <SpotlightDialog section={section} autoplay={autoplay} setAutoplay={setAutoplay} index={spotIndex} setIndex={setSpotIndex} onClose={() => setSpotlight(false)} />}
+    {selectedStudent && selectedStudentSection && <StudentDetailModal student={selectedStudent} section={selectedStudentSection} users={users} onClose={() => { setSelectedStudent(null); setArchiveStudent(null); }} onSaveGrade={saveGradeForSection(selectedStudentSection.id)} readOnly={selectedStudentSection.status === 'archived'} />}
+    {archive && <Modal title={`${archive.name} · ${archiveView.mode === 'reports' ? 'Historical reports' : 'Students'}`} onClose={closeArchive}><p className="alert-note">Read-only archive view. Opening reports does not change the active section.</p>{archiveView.mode === 'students' ? <SectionSummary section={archive} users={users} onOpenStudent={(student) => { setArchiveStudent({ section: archive, student }); setSelectedStudent(student); setArchiveView(null); }} /> : <div className="archived-report-list">{archive.submissions.length ? archive.submissions.map((record) => <SubmissionCard key={record.id} record={record} section={archive} submissions={archive.submissions} users={users} onSaveGrade={() => {}} readOnly />) : <EmptyState title="No historical submissions." />}</div>}</Modal>}
+    {archiveStudent && !selectedStudent && <StudentDetailModal student={archiveStudent.student} section={archiveStudent.section} users={users} onClose={() => setArchiveStudent(null)} onSaveGrade={() => {}} readOnly />}
   </div>;
 }

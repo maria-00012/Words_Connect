@@ -31,7 +31,10 @@ export function AuthProvider({ children }) {
 
   useEffect(() => localStorage.setItem(usersKey, JSON.stringify(users)), [users]);
   useEffect(() => localStorage.setItem(credentialsKey, JSON.stringify(credentials)), [credentials]);
-  useEffect(() => { window.dispatchEvent(new CustomEvent('wc:users-updated', { detail: users })); }, [users]);
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('wc:users-updated', { detail: users }));
+    setUser((current) => current ? users.find((candidate) => candidate.id === current.id) || current : current);
+  }, [users]);
   useEffect(() => {
     if (user) localStorage.setItem(AUTH_KEY, JSON.stringify({ id: user.id }));
   }, [user]);
@@ -58,7 +61,7 @@ export function AuthProvider({ children }) {
     let passwordHash;
     try { passwordHash = await passwordDigest(password); }
     catch { setLoading(false); throw new Error('Secure browser storage is unavailable for this demo.'); }
-    const created = { id: createId('u'), name: name.trim(), email: email.trim().toLowerCase(), role, status: 'Active', classroomId: role === 'student' ? invite?.classroomId : undefined };
+    const created = { id: createId('u'), name: name.trim(), email: email.trim().toLowerCase(), role, status: 'Active', classroomId: role === 'student' ? invite?.classroomId : undefined, sectionId: role === 'student' ? invite?.sectionId : undefined };
     const next = [...users, created];
     setUsers(next);
     setCredentials((current) => ({ ...current, [created.id]: passwordHash }));

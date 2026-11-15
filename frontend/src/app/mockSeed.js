@@ -12,7 +12,7 @@ export const seedState = {
   users: seedUsers,
   invites: [
     { token: 'teacher-demo-invite', type: 'teacher', email: 'new.teacher@example.com', status: 'Pending', expiresAt: Date.now() + 7 * 86400000 },
-    { token: 'student-demo-invite', type: 'student', classroomId: 'class-1', classroomName: 'Fluent Spring', status: 'Active', expiresAt: Date.now() + 7 * 86400000 },
+    { token: 'student-demo-invite', type: 'student', classroomId: 'class-1', classroomName: 'Fluent Spring', sectionId: 'section-1', sectionName: 'Section A', status: 'Active', expiresAt: Date.now() + 7 * 86400000 },
   ],
   classroom: { id: 'class-1', name: 'Fluent Spring', teacherId: 'u-teacher', stage: 0, wallOpen: true, submissionsOpen: true, reveal: false },
   activeSectionId: 'section-1',
