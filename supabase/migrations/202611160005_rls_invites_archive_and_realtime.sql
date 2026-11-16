@@ -185,7 +185,7 @@ grant update (display_name) on public.profiles to authenticated;
 grant insert (owner_teacher_id, name) on public.classrooms to authenticated;
 grant update (name, current_stage, wall_open, submissions_open, awards_revealed, updated_at)
   on public.classrooms to authenticated;
-grant select (id, classroom_id, teacher_id, permission, created_at)
+grant select (classroom_id, teacher_id, permission, created_at)
   on public.classroom_staff to authenticated;
 grant insert, delete on public.classroom_staff to authenticated;
 grant insert on public.classroom_memberships to authenticated;

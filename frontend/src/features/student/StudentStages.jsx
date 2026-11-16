@@ -44,35 +44,75 @@ export function LearningStudio() {
   </div>;
 }
 
-export function PitStop({ quiz, pit = {}, completed, onChange }) {
-  const questions = completed?.questions?.length ? completed.questions : quiz?.questions?.length ? quiz.questions : PIT_STOP.map((item, index) => ({ id: `pit-${index + 1}`, title: item.title, prompt: item.question, options: item.options, correctIndex: item.answer, feedback: item.feedback }));
-  const score = completed?.score ?? questions.filter((item) => pit[item.id]?.choice === item.correctIndex).length;
+export function PitStop({ quiz, pit = {}, completed, onChange, onAnswer, attempts = [], serverManaged = false, activityAvailable = true, readOnly = false }) {
+  const [pendingQuestion, setPendingQuestion] = useState(null);
+  const [error, setError] = useState('');
+  const questions = serverManaged
+    ? (quiz?.questions || [])
+    : completed?.questions?.length ? completed.questions : quiz?.questions?.length ? quiz.questions : PIT_STOP.map((item, index) => ({ id: `pit-${index + 1}`, title: item.title, prompt: item.question, options: item.options, correctIndex: item.answer, feedback: item.feedback }));
+  const score = completed?.score ?? questions.filter((item) => serverManaged
+    ? Boolean(pit[item.id]?.isCorrect ?? pit[item.id]?.correct)
+    : pit[item.id]?.choice === item.correctIndex).length;
+  const answer = async (question, choice) => {
+    if (serverManaged) {
+      setPendingQuestion(question.id); setError('');
+      try { await onAnswer(question.id, choice); }
+      catch (saveError) { setError(saveError.message || 'Your answer could not be saved. Please try again.'); }
+      finally { setPendingQuestion(null); }
+      return;
+    }
+    onChange({ ...pit, [question.id]: { choice, attempts: (pit[question.id]?.attempts || 0) + 1 } });
+  };
   return <div className="stage-stack"><Card><Chip>STAGE 3 · PRACTICE</Chip><h2>Paraphrase Pit Stop</h2><div className="coach-banner"><strong>Mission</strong><p>Participation in university clubs enables first-year students to develop communication skills and establish social connections.</p></div>
-    {quiz?.title && quiz.title !== 'Paraphrase Pit Stop' && <p className="muted">{quiz.title}</p>}<div className="quiz-list">{questions.map((item, index) => { const selected = pit[item.id]?.choice; const correct = selected === item.correctIndex; return <article className="quiz-item" key={item.id || index}><h3>{item.title || `Question ${index + 1}`}</h3><p>{item.prompt || item.question}</p><div className="choice-list">{item.options.map((option, choice) => <button type="button" key={`${item.id}-${choice}`} onClick={() => onChange({ ...pit, [item.id]: { choice, attempts: (pit[item.id]?.attempts || 0) + 1 } })} className={`choice ${selected === choice ? 'selected' : ''}`}>{String.fromCharCode(65 + choice)}. {option}</button>)}</div>{selected !== undefined && <div className={`quiz-feedback ${correct ? 'correct' : 'incorrect'}`}>{correct && <Check size={16} />}{item.feedback?.[selected] || (correct ? 'Correct answer.' : `Review the key idea. Correct answer: ${item.options[item.correctIndex]}`)}</div>}</article>; })}</div>
-    <div className="pit-summary"><Metric value={`${score}/${questions.length}`} label={completed ? 'Saved score' : 'Correct so far'} icon={Trophy} /><Metric value={<Lightbulb size={28} />} label="Meaning first" /></div>{completed && <p className="fine-print">Completed answers and this quiz version are saved for your teacher to review.</p>}</Card></div>;
+    {quiz?.title && quiz.title !== 'Paraphrase Pit Stop' && <p className="muted">{quiz.title}</p>}
+    {!activityAvailable && <EmptyState title="The teacher has paused the Pit Stop." />}
+    {activityAvailable && !questions.length && <EmptyState title={serverManaged ? 'No published Pit Stop quiz is assigned.' : 'No quiz questions are available.'}>Ask your teacher to publish a quiz for this classroom.</EmptyState>}
+    {activityAvailable && questions.length > 0 && <div className="quiz-list">{questions.map((item, index) => {
+      const savedAnswer = pit[item.id];
+      const selected = savedAnswer?.choice;
+      const correct = serverManaged ? Boolean(savedAnswer?.isCorrect ?? savedAnswer?.correct) : selected === item.correctIndex;
+      const feedback = serverManaged ? (savedAnswer?.feedback || (correct ? 'Correct answer.' : 'Review the key idea and try again on your next attempt.')) : (item.feedback?.[selected] || (correct ? 'Correct answer.' : `Review the key idea. Correct answer: ${item.options[item.correctIndex]}`));
+      return <article className="quiz-item" key={item.id || index}><h3>{item.title || `Question ${index + 1}`}</h3><p>{item.prompt || item.question}</p><div className="choice-list">{item.options.map((option, choice) => <button type="button" key={`${item.id}-${choice}`} disabled={readOnly || pendingQuestion !== null} onClick={() => answer(item, choice)} className={`choice ${selected === choice ? 'selected' : ''}`}>{String.fromCharCode(65 + choice)}. {option}</button>)}</div>{selected !== undefined && <div className={`quiz-feedback ${correct ? 'correct' : 'incorrect'}`}>{correct && <Check size={16} />}{feedback}</div>}</article>;
+    })}</div>}
+    {error && <div className="alert-error" role="alert">{error}</div>}
+    <div className="pit-summary"><Metric value={`${score}/${questions.length}`} label={completed ? 'Saved score' : 'Correct so far'} icon={Trophy} /><Metric value={<Lightbulb size={28} />} label="Meaning first" /></div>{completed && <p className="fine-print">Completed answers and this quiz version are saved for your teacher to review.</p>}
+    {serverManaged && attempts.length > 0 && <div className="revision-history"><h3>Previous attempts</h3>{attempts.map((attempt) => <article className="revision-entry" key={attempt.id}><b>Attempt {attempt.attemptNumber}</b><p>{attempt.status === 'completed' ? `${attempt.score}/${attempt.total} correct` : 'In progress'}</p>{attempt.completedAt && <span>{new Date(attempt.completedAt).toLocaleString()}</span>}</article>)}</div>}
+  </Card></div>;
 }
 
-export function RemixTransfer({ wall = [], userId, assignment, setAssignment, remix, setRemix, academic, setAcademic, submission, exercise, onSubmit, submissionsOpen }) {
+export function RemixTransfer({ wall = [], userId, assignment, setAssignment, remix, setRemix, academic, setAcademic, submission, exercise, onSubmit, submissionsOpen, serverManaged = false, activityReady = true }) {
   const [step, setStep] = useState(submission ? 2 : 1);
   const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
   const source = useMemo(() => {
     if (assignment) return assignment;
     const peerPosts = wall.filter((post) => post.authorId !== userId).sort((a, b) => a.createdAt - b.createdAt);
     const hash = [...userId].reduce((value, character) => (value * 31 + character.charCodeAt(0)) >>> 0, 7);
     const peerPost = peerPosts.length ? peerPosts[hash % peerPosts.length] : null;
-    return peerPost ? { id: peerPost.id, authorId: peerPost.authorId, author: peerPost.author, text: peerPost.text } : { author: 'a sample', text: SAMPLE_MESSAGE };
-  }, [assignment, userId, wall]);
-  const continueToAcademic = () => {
+    if (peerPost) return { id: peerPost.id, authorId: peerPost.authorId, author: peerPost.author, text: peerPost.text };
+    return serverManaged ? null : { author: 'a sample', text: SAMPLE_MESSAGE };
+  }, [assignment, userId, wall, serverManaged]);
+  const continueToAcademic = async () => {
+    if (!source) { setError('There are no classmate Appreciation Wall messages available yet. Try again after a classmate posts.'); return; }
     if (!remix.trim() && !submission) { setError('Write your paraphrase of the classmate’s message first.'); return; }
-    setAssignment(source); setError(''); setStep(2);
+    setError(''); setSaving(true);
+    try { await setAssignment(source); setStep(2); }
+    catch (saveError) { setError(saveError.message || 'Your classmate message could not be assigned. Please try again.'); }
+    finally { setSaving(false); }
   };
-  const submit = () => {
+  const submit = async () => {
     if (!submissionsOpen) { setError('Submissions are closed by the teacher.'); return; }
+    if (!activityReady) { setError('The teacher has not assigned both Stage 4 activities yet.'); return; }
+    if (!source) { setError('A classmate’s Appreciation Wall message is required.'); return; }
     if (!academic.trim()) { setError('Write your academic paraphrase first.'); return; }
-    onSubmit({ remix: remix.trim(), sourceMessage: source, academic: academic.trim(), exercise, result: assessParaphrase(academic.trim(), exercise?.sourceSentence || SOURCE_SENTENCE) }); setError('');
+    if (!remix.trim()) { setError('Write your Message Remix paraphrase first.'); return; }
+    setError(''); setSaving(true);
+    try { await onSubmit({ remix: remix.trim(), sourceMessage: source, academic: academic.trim(), exercise, result: assessParaphrase(academic.trim(), exercise?.sourceSentence || SOURCE_SENTENCE) }); }
+    catch (saveError) { setError(saveError.message || 'Your work could not be saved. Please try again.'); }
+    finally { setSaving(false); }
   };
   return <div className="stage-stack">
-    {step === 1 ? <Card><Chip>STAGE 4 · STEP 1 OF 2</Chip><h2>Message Remix <span className="stage-emoji">💬</span></h2><p className="muted">Say the same thing in new words.</p><div className="example-sentence"><small>MESSAGE FROM {source.author.toUpperCase()}</small><p>{source.text}</p></div><div className="chips-row"><Chip>✓ Same meaning</Chip><Chip>✓ New words</Chip><Chip>✓ New pattern</Chip></div><label className="field">Your paraphrase<textarea rows={5} value={remix} onChange={(event) => setRemix(event.target.value)} placeholder="Express the same message differently..." /></label>{error && <div className="alert-error" role="alert">{error}</div>}<Button onClick={continueToAcademic}>Next: academic sentence <ArrowRight size={17} /></Button></Card> : <Card><Chip>STAGE 4 · STEP 2 OF 2</Chip><h2>Academic Transfer <span className="stage-emoji">🎓</span></h2><p className="muted">{exercise?.title || 'Academic Transfer'}</p><div className="example-sentence"><small>ORIGINAL ACADEMIC SENTENCE</small><p>{exercise?.sourceSentence || SOURCE_SENTENCE}</p></div><p className="muted">Find the key ideas → choose new words → rebuild the sentence.</p><label className="field">Your academic paraphrase<textarea rows={6} value={academic} onChange={(event) => setAcademic(event.target.value)} placeholder="Rewrite with your own vocabulary and structure..." /></label><div className="field-meta"><span>{academic.trim() ? academic.trim().split(/\s+/).length : 0} words</span><span>Meaning first · Your own voice</span></div>{!submissionsOpen && <div className="alert-note">Your teacher has closed submissions for now.</div>}{error && <div className="alert-error" role="alert">{error}</div>}<div className="form-actions"><Button variant="secondary" onClick={() => { setStep(1); setError(''); }}><ArrowLeft size={17} /> Back</Button><Button variant="lime" onClick={submit} disabled={!submissionsOpen}><Check size={17} /> Submit</Button></div></Card>}
+    {step === 1 ? <Card><Chip>STAGE 4 · STEP 1 OF 2</Chip><h2>Message Remix <span className="stage-emoji">💬</span></h2><p className="muted">Say the same thing in new words.</p>{source ? <div className="example-sentence"><small>MESSAGE FROM {source.author.toUpperCase()}</small><p>{source.text}</p></div> : <EmptyState title="No classmate messages are available yet.">The classmate’s Appreciation Wall message will appear here once someone posts.</EmptyState>}<div className="chips-row"><Chip>✓ Same meaning</Chip><Chip>✓ New words</Chip><Chip>✓ New pattern</Chip></div><label className="field">Your paraphrase<textarea rows={5} value={remix} onChange={(event) => setRemix(event.target.value)} placeholder="Express the same message differently..." /></label>{error && <div className="alert-error" role="alert">{error}</div>}<Button onClick={continueToAcademic} disabled={saving || !source}>{saving ? 'Saving…' : <>Next: academic sentence <ArrowRight size={17} /></>}</Button></Card> : <Card><Chip>STAGE 4 · STEP 2 OF 2</Chip><h2>Academic Transfer <span className="stage-emoji">🎓</span></h2><p className="muted">{exercise?.title || 'Academic Transfer'}</p>{exercise?.sourceSentence ? <div className="example-sentence"><small>ORIGINAL ACADEMIC SENTENCE</small><p>{exercise.sourceSentence}</p></div> : serverManaged ? <EmptyState title="No academic exercise is assigned yet.">Ask your teacher to assign an Academic Transfer exercise.</EmptyState> : <div className="example-sentence"><small>ORIGINAL ACADEMIC SENTENCE</small><p>{SOURCE_SENTENCE}</p></div>}<p className="muted">Find the key ideas → choose new words → rebuild the sentence.</p><label className="field">Your academic paraphrase<textarea rows={6} value={academic} onChange={(event) => setAcademic(event.target.value)} placeholder="Rewrite with your own vocabulary and structure..." /></label><div className="field-meta"><span>{academic.trim() ? academic.trim().split(/\s+/).length : 0} words</span><span>Meaning first · Your own voice</span></div>{!submissionsOpen && <div className="alert-note">Your teacher has closed submissions for now.</div>}{error && <div className="alert-error" role="alert">{error}</div>}<div className="form-actions"><Button variant="secondary" onClick={() => { setStep(1); setError(''); }} disabled={saving}><ArrowLeft size={17} /> Back</Button><Button variant="lime" onClick={submit} disabled={!submissionsOpen || saving || !activityReady}>{saving ? 'Saving…' : <><Check size={17} /> Submit</>}</Button></div></Card>}
     {submission && <Card className="saved-submission"><Chip>LAST SUBMISSION SAVED</Chip><p>Your latest academic paraphrase is saved. You can revise it from your report.</p><Button variant="secondary" onClick={() => setStep(2)}>Review submission <ArrowRight size={16} /></Button></Card>}
   </div>;
 }

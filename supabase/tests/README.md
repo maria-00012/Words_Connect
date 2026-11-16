@@ -1,5 +1,7 @@
 # SQL regression tests
 
+`first_admin_bootstrap.sql` is an additional manual test for migration 006. It expects a disposable database with an unclaimed singleton authorized to `bootstrap_authorized_user_id`, plus distinct confirmed Auth users/profiles for `bootstrap_unauthorized_user_id` and `bootstrap_existing_admin_user_id`. All three profiles must initially be students. Run it as the database owner; the script invokes RPC calls under `authenticated`, tests private-table denial, tests successful claim and idempotent retry, simulates a pre-existing administrator, and rolls back all fixture changes. It requires the three `-v name=uuid` values named at its top.
+
 These are manual `psql` regression scripts for a **disposable Supabase database** after migrations 001–005 have been applied. They are not migrations and have not been executed. Run with an authorized test connection and the required `-v name=uuid` variables shown at each script's top. The scripts open a transaction and roll back their changes.
 
 ## Ranking fixture contract

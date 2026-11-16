@@ -14,7 +14,7 @@ function WorkspaceLayout({ role, children }) {
   const Icon = role === 'admin' ? ShieldCheck : role === 'teacher' ? UsersRound : BookOpen;
   return <div className={`workspace ${role}-workspace`}>
     <header className="topbar workspace-topbar"><Link to={base} className="brand"><span className="brand-mark">W</span><span>WORDS CONNECT<small>{labels[role]}</small></span></Link>
-      <div className="topbar-actions"><span className="topbar-user"><span className="avatar">{user?.name?.[0]}</span><span className="topbar-user-name">{user?.name}<small>{role}</small></span></span><Link className="icon-link" to={`${base}/profile`} aria-label="Profile"><CircleUserRound size={19} /></Link><button className="icon-link" onClick={() => { logout(); navigate('/login'); }} aria-label="Log out"><LogOut size={19} /></button></div>
+      <div className="topbar-actions"><span className="topbar-user"><span className="avatar">{user?.name?.[0]}</span><span className="topbar-user-name">{user?.name}<small>{role}</small></span></span><Link className="icon-link" to={`${base}/profile`} aria-label="Profile"><CircleUserRound size={19} /></Link><button className="icon-link" onClick={async () => { try { await logout(); } finally { navigate('/login'); } }} aria-label="Log out"><LogOut size={19} /></button></div>
     </header>
     <div className="workspace-body"><aside className="side-rail"><div className="side-label"><Icon size={15} /> {labels[role]}</div><nav className="side-nav">
       {role === 'student' && <NavLink to={base}><BookOpen size={18} /> My learning</NavLink>}

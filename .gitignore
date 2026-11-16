@@ -1,0 +1,13 @@
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+
+# Dependencies and generated outputs
+node_modules/
+frontend/dist/
+frontend/playwright-report/
+frontend/test-results/
+
+# Local Supabase CLI state
+supabase/.temp/

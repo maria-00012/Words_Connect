@@ -1,21 +1,78 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { seedState } from '../app/mockSeed.js';
 import { createId } from '../services/mockApi.js';
 import { DATA_KEY, createSectionRecord, emptyGrading, loadInitialState } from '../services/dataModel.js';
+import { useAuth } from './AuthContext.jsx';
+import { supabase } from '../lib/supabase.js';
+import { archiveClassroom, changeClassroomSettings, createClassroom, createOrUpdateQuiz, createStudentInvitation, loadTeacherDashboard, saveAcademicExercises, saveOfficialAssessment, setMembership, subscribeToTeacherChanges } from '../features/teacher/teacherRepository.js';
+import { answerStudentPitStop, loadStudentDashboard, saveStudentAcademicRevision, saveStudentRemixAssignment, saveStudentStage, submitStudentStage4 } from '../features/student/studentRepository.js';
 
 const DataContext = createContext(null);
 
 export function DataProvider({ children }) {
-  const [data, setData] = useState(() => loadInitialState(globalThis.localStorage, seedState));
+  const { user } = useAuth();
+  const remoteTeacher = Boolean(supabase && user?.role === 'teacher');
+  const remoteStudent = Boolean(supabase && user?.role === 'student');
+  const remoteUser = remoteTeacher || remoteStudent;
+  const [localData, setLocalData] = useState(() => loadInitialState(globalThis.localStorage, seedState));
+  const [remoteData, setRemoteData] = useState(null);
+  const [remoteStatus, setRemoteStatus] = useState('idle');
+  const [remoteError, setRemoteError] = useState('');
+  const reloadRef = useRef(null);
+  const remoteMutationRef = useRef(Promise.resolve());
+  const data = remoteUser
+    ? (remoteData?.userId === user?.id ? remoteData : { sections: [], activeSectionId: null, users: [], invites: [], classroom: null })
+    : localData;
   const activeSection = data.sections.find((section) => section.id === data.activeSectionId) || null;
 
   useEffect(() => {
+    if (remoteUser) return;
     try { localStorage.setItem(DATA_KEY, JSON.stringify(data)); }
     catch { /* Storage failures do not replace or clear the existing saved data. */ }
-  }, [data]);
+  }, [data, remoteUser]);
+
+  const reloadRemote = useCallback(async () => {
+    setRemoteStatus((current) => current === 'loaded' ? current : 'loading');
+    setRemoteError('');
+    try {
+      const fresh = remoteTeacher ? await loadTeacherDashboard() : await loadStudentDashboard();
+      setRemoteData((current) => ({ ...fresh, invites: current?.invites || [] }));
+      setRemoteStatus('loaded');
+      return fresh;
+    } catch (error) {
+      setRemoteError(error.message || 'Unable to load classrooms from Supabase.');
+      setRemoteStatus('error');
+      throw error;
+    }
+  }, [remoteTeacher]);
+  reloadRef.current = reloadRemote;
 
   useEffect(() => {
-    const syncUsers = (event) => setData((current) => {
+    if (!remoteUser) {
+      setRemoteStatus('idle'); setRemoteError(''); setRemoteData(null);
+      return undefined;
+    }
+    let mounted = true;
+    const refresh = async () => {
+      try {
+        const fresh = remoteTeacher ? await loadTeacherDashboard() : await loadStudentDashboard();
+        if (mounted) {
+          setRemoteData((current) => ({ ...fresh, invites: current?.invites || [] }));
+          setRemoteStatus('loaded'); setRemoteError('');
+        }
+      } catch (error) {
+        if (mounted) { setRemoteError(error.message || 'Unable to load classrooms from Supabase.'); setRemoteStatus('error'); }
+      }
+    };
+    setRemoteStatus('loading');
+    refresh();
+    const unsubscribe = subscribeToTeacherChanges(() => { if (mounted) refresh(); });
+    return () => { mounted = false; unsubscribe(); };
+  }, [remoteUser, remoteTeacher, user?.id]);
+
+  useEffect(() => {
+    if (remoteUser) return undefined;
+    const syncUsers = (event) => setLocalData((current) => {
       const users = event.detail.map((user) => ({ ...user }));
       const sections = current.sections.map((section) => ({ ...section, studentIds: [...section.studentIds] }));
       users.filter((user) => user.role === 'student').forEach((user) => {
@@ -29,71 +86,216 @@ export function DataProvider({ children }) {
     });
     window.addEventListener('wc:users-updated', syncUsers);
     return () => window.removeEventListener('wc:users-updated', syncUsers);
-  }, []);
+  }, [remoteUser]);
 
   const value = useMemo(() => {
-    const updateSection = (sectionId, changes) => setData((current) => ({
+    const runRemote = (operation) => {
+      if (!remoteTeacher) return null;
+      setRemoteError('');
+      const task = remoteMutationRef.current.catch(() => undefined)
+        .then(operation)
+        .then(() => reloadRef.current?.());
+      remoteMutationRef.current = task.catch(() => undefined);
+      task.catch((error) => setRemoteError(error.message || 'The change could not be saved.'));
+      return task;
+    };
+    const runRemoteStudent = (operation) => {
+      if (!remoteStudent) return null;
+      setRemoteError('');
+      const task = remoteMutationRef.current.catch(() => undefined)
+        .then(operation)
+        .then(async (result) => {
+          await reloadRef.current?.();
+          return result;
+        });
+      remoteMutationRef.current = task.catch(() => undefined);
+      task.catch((error) => setRemoteError(error.message || 'Your work could not be saved.'));
+      return task;
+    };
+    const findRemoteSection = (sectionId) => remoteData?.sections.find((section) => section.id === sectionId);
+    const updateStudentRemoteSection = (sectionId, updater) => {
+      if (!remoteStudent) return;
+      setRemoteData((current) => current?.userId !== user?.id ? current : ({
+        ...current,
+        sections: current.sections.map((section) => section.id === sectionId ? updater(section) : section),
+      }));
+    };
+    const updateSection = (sectionId, changes) => {
+      if (remoteTeacher) {
+        const current = findRemoteSection(sectionId);
+        if (!current) return;
+        return runRemote(async () => {
+          if (changes.name !== undefined) await changeClassroomSettings(sectionId, { name: changes.name });
+          if (changes.quiz) await createOrUpdateQuiz(current, changes.quiz);
+          if (changes.academicExercises) await saveAcademicExercises(current, changes.academicExercises, changes.assignedExerciseId);
+        });
+      }
+      return setLocalData((current) => ({
       ...current,
       sections: current.sections.map((section) => section.id === sectionId
         ? { ...section, ...changes, updatedAt: Date.now() }
         : section),
-    }));
-    const updateProgress = (userId, changes, sectionId = data.activeSectionId) => setData((current) => ({
+      }));
+    };
+    const updateProgress = (userId, changes, sectionId = data.activeSectionId) => {
+      if (remoteStudent) {
+        if (changes.stage !== undefined) {
+          updateStudentRemoteSection(sectionId, (section) => ({
+            ...section, progress: { ...section.progress, [userId]: { ...(section.progress[userId] || {}), stage: changes.stage } },
+          }));
+          return runRemoteStudent(() => saveStudentStage(sectionId, changes.stage)).catch(() => undefined);
+        }
+        return updateStudentRemoteSection(sectionId, (section) => ({
+          ...section, studentIds: section.studentIds.includes(userId) ? section.studentIds : [...section.studentIds, userId],
+          progress: { ...section.progress, [userId]: { ...(section.progress[userId] || {}), ...changes } }, updatedAt: Date.now(),
+        }));
+      }
+      return setLocalData((current) => ({
       ...current,
       sections: current.sections.map((section) => section.id === sectionId && section.status !== 'archived'
         ? { ...section, studentIds: section.studentIds.includes(userId) ? section.studentIds : [...section.studentIds, userId], progress: { ...section.progress, [userId]: { ...(section.progress[userId] || {}), ...changes } }, updatedAt: Date.now() }
         : section),
-    }));
-    const updateClassroom = (changes, sectionId = data.activeSectionId) => setData((current) => ({
+      }));
+    };
+    const updateClassroom = (changes, sectionId = data.activeSectionId) => {
+      if (remoteTeacher) return runRemote(() => changeClassroomSettings(sectionId, changes));
+      return setLocalData((current) => ({
       ...current,
       sections: current.sections.map((section) => section.id === sectionId
         ? { ...section, settings: { ...section.settings, ...changes }, updatedAt: Date.now() }
         : section),
-    }));
-    const addWallPost = (post, sectionId = data.activeSectionId) => setData((current) => {
+      }));
+    };
+    const addWallPost = (post, sectionId = data.activeSectionId) => {
       const record = { ...post, id: createId('wall'), sectionId, createdAt: Date.now() };
+      if (remoteStudent) return updateStudentRemoteSection(sectionId, (section) => ({
+        ...section, studentIds: section.studentIds.includes(post.authorId) ? section.studentIds : [...section.studentIds, post.authorId],
+        wall: [...section.wall, record], submissions: [...section.submissions, { id: record.id, type: 'appreciation', studentId: post.authorId, sectionId, response: record.text, recipient: record.recipient, submittedAt: record.createdAt, grading: emptyGrading() }], updatedAt: Date.now(),
+      }));
+      return setLocalData((current) => {
       return {
         ...current,
         sections: current.sections.map((section) => section.id === sectionId && section.status !== 'archived'
           ? { ...section, studentIds: section.studentIds.includes(post.authorId) ? section.studentIds : [...section.studentIds, post.authorId], wall: [...section.wall, record], submissions: [...section.submissions, { id: record.id, type: 'appreciation', studentId: post.authorId, sectionId, response: record.text, recipient: record.recipient, submittedAt: record.createdAt, grading: emptyGrading() }], updatedAt: Date.now() }
           : section),
       };
-    });
-    const addSubmission = (record, sectionId = data.activeSectionId) => setData((current) => ({
+      });
+    };
+    const addSubmission = (record, sectionId = data.activeSectionId) => {
+      if (remoteStudent) return updateStudentRemoteSection(sectionId, (section) => ({
+        ...section, studentIds: section.studentIds.includes(record.studentId) ? section.studentIds : [...section.studentIds, record.studentId],
+        submissions: [...section.submissions, { ...record, id: record.id || createId('submission'), sectionId, submittedAt: record.submittedAt || Date.now(), grading: record.grading || emptyGrading() }], updatedAt: Date.now(),
+      }));
+      return setLocalData((current) => ({
       ...current,
       sections: current.sections.map((section) => section.id === sectionId && section.status !== 'archived'
         ? { ...section, studentIds: section.studentIds.includes(record.studentId) ? section.studentIds : [...section.studentIds, record.studentId], submissions: [...section.submissions, { ...record, id: record.id || createId('submission'), sectionId, submittedAt: record.submittedAt || Date.now(), grading: record.grading || emptyGrading() }], updatedAt: Date.now() }
         : section),
-    }));
-    const saveGrade = (submissionId, grade, sectionId = data.activeSectionId) => setData((current) => ({
+      }));
+    };
+    const answerPitStop = (sectionId, activityInstanceId, questionId, selectedOptionIndex) => {
+      if (!remoteStudent) return null;
+      const section = remoteData?.sections.find((item) => item.id === sectionId);
+      if (!section || section.status !== 'open') return Promise.reject(new Error('This classroom is read-only.'));
+      return runRemoteStudent(() => answerStudentPitStop({ activityInstanceId, questionId, selectedOptionIndex }));
+    };
+    const saveRemixAssignment = (sectionId, sourceMessage) => {
+      if (!remoteStudent) return updateStudentRemoteSection(sectionId, (section) => ({ ...section, progress: { ...section.progress, [user.id]: { ...(section.progress[user.id] || {}), assignment: sourceMessage } } }));
+      return runRemoteStudent(() => saveStudentRemixAssignment(sectionId, sourceMessage));
+    };
+    const submitStage4 = (sectionId, payload) => {
+      if (!remoteStudent) return null;
+      const section = remoteData?.sections.find((item) => item.id === sectionId);
+      if (!section || section.status !== 'open') return Promise.reject(new Error('This classroom is read-only.'));
+      const remixActivity = section.activities?.find((item) => item.activity_type === 'message-remix');
+      const academicActivity = section.activities?.find((item) => item.activity_type === 'academic-transfer');
+      return runRemoteStudent(() => submitStudentStage4({
+        remixActivityId: remixActivity?.id,
+        academicActivityId: academicActivity?.id,
+        ...payload,
+      }));
+    };
+    const saveStudentRevision = (sectionId, originalSubmissionId, response) => {
+      if (!remoteStudent) return null;
+      const section = remoteData?.sections.find((item) => item.id === sectionId);
+      if (!section || section.status !== 'open') return Promise.reject(new Error('This classroom is read-only.'));
+      return runRemoteStudent(() => saveStudentAcademicRevision(originalSubmissionId, response));
+    };
+    const saveGrade = (submissionId, grade, sectionId = data.activeSectionId) => {
+      if (remoteTeacher) return runRemote(() => saveOfficialAssessment(submissionId, grade));
+      return setLocalData((current) => ({
       ...current,
       sections: current.sections.map((section) => section.id === sectionId
         ? { ...section, submissions: section.submissions.map((record) => record.id === submissionId ? { ...record, grading: { ...(record.grading || emptyGrading()), ...grade, updatedAt: Date.now() } } : record), updatedAt: Date.now() }
         : section),
-    }));
-    const createSection = (name) => setData((current) => {
+      }));
+    };
+    const createSection = (name) => {
+      if (remoteTeacher) return runRemote(async () => {
+        const created = await createClassroom(name);
+        // Persist the selection before the queued reload so the new classroom
+        // becomes the current section even when another section was selected.
+        try { localStorage.setItem('wc_teacher_active_classroom_id', created.id); } catch { /* Optional UI preference. */ }
+        return created;
+      });
+      return setLocalData((current) => {
       const section = createSectionRecord({ name: name.trim() || `Section ${String.fromCharCode(65 + current.sections.length)}` });
       return { ...current, sections: [...current.sections, section] };
-    });
-    const setActiveSection = (sectionId) => setData((current) => current.sections.some((section) => section.id === sectionId && section.status !== 'archived')
+      });
+    };
+    const setActiveSection = (sectionId) => {
+      if (remoteTeacher) {
+        if (!remoteData?.sections.some((section) => section.id === sectionId && section.status === 'open')) return;
+        try { localStorage.setItem('wc_teacher_active_classroom_id', sectionId); } catch { /* Optional local UI preference. */ }
+        setRemoteData((current) => ({ ...current, activeSectionId: sectionId, classroom: { id: sectionId, name: current.sections.find((section) => section.id === sectionId)?.name, teacherId: user?.id } }));
+        return;
+      }
+      if (remoteStudent) {
+        if (!remoteData?.sections.some((section) => section.id === sectionId)) return;
+        try { localStorage.setItem('wc_student_active_classroom_id', sectionId); } catch { /* Optional UI preference. */ }
+        setRemoteData((current) => ({ ...current, activeSectionId: sectionId, classroom: { id: sectionId, name: current.sections.find((section) => section.id === sectionId)?.name } }));
+        return;
+      }
+      return setLocalData((current) => current.sections.some((section) => section.id === sectionId && section.status !== 'archived')
       ? { ...current, activeSectionId: sectionId }
       : current);
-    const archiveSection = (sectionId) => setData((current) => {
+    };
+    const archiveSection = (sectionId) => {
+      if (remoteTeacher) {
+        const archived = findRemoteSection(sectionId)?.status === 'archived';
+        return runRemote(async () => {
+          await archiveClassroom(sectionId, archived);
+          if (archived) try { localStorage.setItem('wc_teacher_active_classroom_id', sectionId); } catch { /* optional */ }
+        });
+      }
+      return setLocalData((current) => {
       const target = current.sections.find((section) => section.id === sectionId);
       if (!target) return current;
       const sections = current.sections.map((section) => section.id === sectionId ? { ...section, status: 'archived', archivedAt: Date.now(), settings: { ...section.settings, wallOpen: false, submissionsOpen: false }, updatedAt: Date.now() } : section);
       const next = current.activeSectionId === sectionId ? sections.find((section) => section.status !== 'archived') : null;
       return { ...current, sections, activeSectionId: current.activeSectionId === sectionId ? next?.id || null : current.activeSectionId };
-    });
-    const reopenSection = (sectionId) => setData((current) => current.sections.some((section) => section.id === sectionId)
+      });
+    };
+    const reopenSection = (sectionId) => {
+      if (remoteTeacher) return runRemote(async () => {
+        await archiveClassroom(sectionId, true);
+        try { localStorage.setItem('wc_teacher_active_classroom_id', sectionId); } catch { /* optional */ }
+      });
+      return setLocalData((current) => current.sections.some((section) => section.id === sectionId)
       ? { ...current, activeSectionId: sectionId, sections: current.sections.map((section) => section.id === sectionId ? { ...section, status: 'open', archivedAt: null, settings: { ...section.settings, wallOpen: true, submissionsOpen: true }, updatedAt: Date.now() } : section) }
       : current);
-    const deleteSection = (sectionId) => setData((current) => {
+    };
+    const deleteSection = (sectionId) => {
+      if (remoteTeacher) return runRemote(() => { throw new Error('Classroom deletion is not supported by the database. Archive it to preserve its history.'); });
+      return setLocalData((current) => {
       const remaining = current.sections.filter((section) => section.id !== sectionId);
       const nextActive = current.activeSectionId === sectionId ? remaining.find((section) => section.status !== 'archived')?.id || remaining[0]?.id || null : current.activeSectionId;
       return { ...current, sections: remaining, activeSectionId: nextActive };
-    });
-    const resetSection = (sectionId) => setData((current) => ({
+      });
+    };
+    const resetSection = (sectionId) => {
+      if (remoteTeacher) return runRemote(() => { throw new Error('Activity reset is not supported by the database. Historical work and grades are retained.'); });
+      return setLocalData((current) => ({
       ...current,
       sections: current.sections.map((section) => section.id === sectionId ? {
         ...section,
@@ -102,23 +304,34 @@ export function DataProvider({ children }) {
         settings: { ...section.settings, stage: 0, reveal: false },
         updatedAt: Date.now(),
       } : section),
-    }));
-    const setStudentSection = (studentId, sectionId, isMember = true) => setData((current) => ({
+      }));
+    };
+    const setStudentSection = (studentId, sectionId, isMember = true) => {
+      if (remoteTeacher) return runRemote(() => setMembership(sectionId, studentId, isMember));
+      return setLocalData((current) => ({
       ...current,
       sections: current.sections.map((section) => section.id !== sectionId ? section : ({
         ...section,
         studentIds: isMember ? [...new Set([...section.studentIds, studentId])] : section.studentIds.filter((id) => id !== studentId),
         updatedAt: Date.now(),
       })),
-    }));
+      }));
+    };
+    const addInvite = (invite) => {
+      const replaceInvite = (invites = []) => [invite, ...invites.filter((item) => item.id !== invite.id && item.token !== invite.token)];
+      if (remoteTeacher) setRemoteData((current) => current?.userId !== user?.id ? current : ({ ...current, invites: replaceInvite(current.invites) }));
+      else setLocalData((current) => ({ ...current, invites: replaceInvite(current.invites) }));
+    };
     return {
-      data, setData, activeSection, updateSection, updateProgress, updateClassroom,
-      addWallPost, addSubmission, saveGrade, createSection, setActiveSection,
+      data, activeSection, updateSection, updateProgress, updateClassroom,
+      addWallPost, addSubmission, saveGrade, answerPitStop, saveRemixAssignment,
+      submitStage4, saveStudentRevision, createSection, setActiveSection,
       archiveSection, reopenSection, deleteSection, setStudentSection,
       resetSection,
-      addInvite: (invite) => setData((current) => ({ ...current, invites: [invite, ...current.invites] })),
+      addInvite, createStudentInvitation: (classroomId) => createStudentInvitation(classroomId),
+      remoteTeacher, remoteStudent, remoteStatus, remoteError, retryRemote: reloadRemote,
     };
-  }, [data, activeSection]);
+  }, [data, activeSection, remoteTeacher, remoteStudent, remoteData, remoteStatus, remoteError, user?.id, reloadRemote]);
 
   return <DataContext.Provider value={value}>{children}</DataContext.Provider>;
 }
